@@ -40,6 +40,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         ('admin', 'Admin'),
         ('manager', 'Manager'),
         ('employee', 'Employee'),
+        ('student', 'Student'),
     ]
     role = models.CharField(max_length=10, choices=role_choices, default='employee')
     department = models.CharField(max_length=50, blank=True, null=True)
