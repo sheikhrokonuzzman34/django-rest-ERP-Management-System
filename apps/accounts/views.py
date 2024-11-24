@@ -68,8 +68,8 @@ def login(request):
         if user:
             refresh = RefreshToken.for_user(user)
             return Response({
-                'refresh': str(refresh),
                 'access': str(refresh.access_token),
+                'refresh': str(refresh),
                 'user': {
                     'email': user.email,
                     'first_name': user.first_name,
