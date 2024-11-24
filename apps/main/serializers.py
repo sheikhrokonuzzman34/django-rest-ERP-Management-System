@@ -1,312 +1,246 @@
-# views.py
-from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from django.shortcuts import get_object_or_404
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
-from datetime import datetime, timedelta
-from django.db.models import Sum, Avg
-from django.utils.timezone import now
+# serializers.py
+from rest_framework import serializers
+from django.contrib.auth import get_user_model
+from datetime import datetime
 
 from .models import (
     Student, Teacher, Class, Section, ClassSection, 
     Subject, Attendance, Exam, ExamResult, Fee
 )
-from .serializers import (
-    StudentSerializer, TeacherSerializer, ClassSerializer, 
-    SectionSerializer, ClassSectionSerializer, SubjectSerializer,
-    AttendanceSerializer, ExamSerializer, ExamResultSerializer,
-    FeeSerializer
-)
 
-# Student Management Views
-@swagger_auto_schema(
-    methods=['get'],
-    responses={200: StudentSerializer(many=True)},
-    operation_description="Get list of all students"
-)
-@swagger_auto_schema(
-    methods=['post'],
-    request_body=StudentSerializer,
-    responses={201: StudentSerializer()},
-    operation_description="Create a new student"
-)
-@api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
-def student_list(request):
-    if request.method == 'GET':
-        students = Student.objects.all()
-        serializer = StudentSerializer(students, many=True)
-        return Response(serializer.data)
-    
-    elif request.method == 'POST':
-        serializer = StudentSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+User = get_user_model()
 
-@swagger_auto_schema(
-    methods=['get', 'put', 'delete'],
-    responses={
-        200: StudentSerializer(),
-        204: 'No Content',
-        404: 'Not Found'
-    }
-)
-@api_view(['GET', 'PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
-def student_detail(request, pk):
-    student = get_object_or_404(Student, pk=pk)
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ('id', 'email', 'first_name', 'last_name', 'phone_number', 'role')
+        read_only_fields = ('id', 'email')
 
-    if request.method == 'GET':
-        serializer = StudentSerializer(student)
-        return Response(serializer.data)
+class StudentSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    class_section_name = serializers.SerializerMethodField()
+    attendance_percentage = serializers.SerializerMethodField()
+    pending_fees = serializers.SerializerMethodField()
 
-    elif request.method == 'PUT':
-        serializer = StudentSerializer(student, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    class Meta:
+        model = Student
+        fields = (
+            'id', 'user', 'admission_number', 'roll_number', 'date_of_birth',
+            'gender', 'address', 'guardian_name', 'guardian_phone',
+            'guardian_email', 'class_section', 'class_section_name',
+            'admission_date', 'is_active', 'attendance_percentage',
+            'pending_fees'
+        )
+        read_only_fields = ('id', 'admission_date', 'attendance_percentage', 'pending_fees')
 
-    elif request.method == 'DELETE':
-        student.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+    def get_class_section_name(self, obj):
+        return f"{obj.class_section.class_name.name} - {obj.class_section.section.name}"
 
-# Teacher Management Views
-@swagger_auto_schema(
-    methods=['get', 'post'],
-    responses={
-        200: TeacherSerializer(many=True),
-        201: TeacherSerializer()
-    }
-)
-@api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
-def teacher_list(request):
-    if request.method == 'GET':
-        teachers = Teacher.objects.all()
-        serializer = TeacherSerializer(teachers, many=True)
-        return Response(serializer.data)
-    
-    elif request.method == 'POST':
-        serializer = TeacherSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def get_attendance_percentage(self, obj):
+        total_days = Attendance.objects.filter(student=obj).count()
+        if total_days == 0:
+            return 0
+        present_days = Attendance.objects.filter(student=obj, status='P').count()
+        return round((present_days / total_days) * 100, 2)
 
-# Class and Section Management Views
-@swagger_auto_schema(
-    methods=['get', 'post'],
-    responses={
-        200: ClassSectionSerializer(many=True),
-        201: ClassSectionSerializer()
-    }
-)
-@api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
-def class_section_list(request):
-    if request.method == 'GET':
-        class_sections = ClassSection.objects.all()
-        serializer = ClassSectionSerializer(class_sections, many=True)
-        return Response(serializer.data)
-    
-    elif request.method == 'POST':
-        serializer = ClassSectionSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def get_pending_fees(self, obj):
+        return Fee.objects.filter(student=obj, status='PEN').count()
 
-# Attendance Management Views
-@swagger_auto_schema(
-    method='post',
-    request_body=AttendanceSerializer,
-    responses={201: AttendanceSerializer()}
-)
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def mark_attendance(request):
-    serializer = AttendanceSerializer(data=request.data)
-    if serializer.is_valid():
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+class TeacherSerializer(serializers.ModelSerializer):
+    user = UserSerializer(read_only=True)
+    subjects_detail = serializers.SerializerMethodField()
+    class_sections = serializers.SerializerMethodField()
 
-@swagger_auto_schema(
-    method='get',
-    manual_parameters=[
-        openapi.Parameter('student_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
-        openapi.Parameter('start_date', openapi.IN_QUERY, type=openapi.TYPE_STRING, format='date'),
-        openapi.Parameter('end_date', openapi.IN_QUERY, type=openapi.TYPE_STRING, format='date'),
-    ],
-    responses={200: AttendanceSerializer(many=True)}
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def get_attendance_report(request):
-    student_id = request.query_params.get('student_id')
-    start_date = request.query_params.get('start_date')
-    end_date = request.query_params.get('end_date')
-    
-    attendance = Attendance.objects.all()
-    if student_id:
-        attendance = attendance.filter(student_id=student_id)
-    if start_date:
-        attendance = attendance.filter(date__gte=start_date)
-    if end_date:
-        attendance = attendance.filter(date__lte=end_date)
-    
-    serializer = AttendanceSerializer(attendance, many=True)
-    return Response(serializer.data)
+    class Meta:
+        model = Teacher
+        fields = (
+            'id', 'user', 'employee_id', 'qualification',
+            'experience_years', 'subjects', 'subjects_detail',
+            'class_sections', 'date_joined', 'is_active'
+        )
+        read_only_fields = ('id', 'date_joined')
 
-# Exam Management Views
-@swagger_auto_schema(
-    methods=['get', 'post'],
-    responses={
-        200: ExamSerializer(many=True),
-        201: ExamSerializer()
-    }
-)
-@api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
-def exam_management(request):
-    if request.method == 'GET':
-        exams = Exam.objects.all()
-        serializer = ExamSerializer(exams, many=True)
-        return Response(serializer.data)
-    
-    elif request.method == 'POST':
-        serializer = ExamSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def get_subjects_detail(self, obj):
+        return [{'id': subject.id, 'name': subject.name} for subject in obj.subjects.all()]
 
-@swagger_auto_schema(
-    method='post',
-    request_body=ExamResultSerializer,
-    responses={201: ExamResultSerializer()}
-)
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def add_exam_result(request):
-    serializer = ExamResultSerializer(data=request.data)
-    if serializer.is_valid():
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    def get_class_sections(self, obj):
+        class_sections = ClassSection.objects.filter(class_teacher=obj)
+        return [f"{cs.class_name.name} - {cs.section.name}" for cs in class_sections]
 
-@swagger_auto_schema(
-    method='get',
-    manual_parameters=[
-        openapi.Parameter('student_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
-        openapi.Parameter('exam_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
-    ],
-    responses={200: ExamResultSerializer(many=True)}
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def get_exam_results(request):
-    student_id = request.query_params.get('student_id')
-    exam_id = request.query_params.get('exam_id')
-    
-    results = ExamResult.objects.all()
-    if student_id:
-        results = results.filter(student_id=student_id)
-    if exam_id:
-        results = results.filter(exam_id=exam_id)
-    
-    serializer = ExamResultSerializer(results, many=True)
-    return Response(serializer.data)
+class ClassSerializer(serializers.ModelSerializer):
+    total_students = serializers.SerializerMethodField()
 
-# Fee Management Views
-@swagger_auto_schema(
-    methods=['get', 'post'],
-    responses={
-        200: FeeSerializer(many=True),
-        201: FeeSerializer()
-    }
-)
-@api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
-def fee_management(request):
-    if request.method == 'GET':
-        fees = Fee.objects.all()
-        serializer = FeeSerializer(fees, many=True)
-        return Response(serializer.data)
-    
-    elif request.method == 'POST':
-        serializer = FeeSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    class Meta:
+        model = Class
+        fields = ('id', 'name', 'description', 'total_students')
 
-@swagger_auto_schema(
-    method='post',
-    request_body=openapi.Schema(
-        type=openapi.TYPE_OBJECT,
-        properties={
-            'fee_id': openapi.Schema(type=openapi.TYPE_INTEGER),
-            'payment_method': openapi.Schema(type=openapi.TYPE_STRING),
-            'paid_amount': openapi.Schema(type=openapi.TYPE_NUMBER),
+    def get_total_students(self, obj):
+        return Student.objects.filter(class_section__class_name=obj).count()
+
+class SectionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Section
+        fields = ('id', 'name', 'description')
+
+class ClassSectionSerializer(serializers.ModelSerializer):
+    class_name_detail = ClassSerializer(source='class_name', read_only=True)
+    section_detail = SectionSerializer(source='section', read_only=True)
+    class_teacher_detail = TeacherSerializer(source='class_teacher', read_only=True)
+    students_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClassSection
+        fields = (
+            'id', 'class_name', 'class_name_detail', 
+            'section', 'section_detail',
+            'class_teacher', 'class_teacher_detail',
+            'academic_year', 'room_number', 'students_count'
+        )
+
+    def get_students_count(self, obj):
+        return Student.objects.filter(class_section=obj).count()
+
+class SubjectSerializer(serializers.ModelSerializer):
+    teachers = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Subject
+        fields = ('id', 'name', 'code', 'description', 'credits', 'teachers')
+
+    def get_teachers(self, obj):
+        teachers = Teacher.objects.filter(subjects=obj)
+        return [f"{teacher.user.first_name} {teacher.user.last_name}" for teacher in teachers]
+
+class AttendanceSerializer(serializers.ModelSerializer):
+    student_detail = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = Attendance
+        fields = (
+            'id', 'student', 'student_detail', 
+            'date', 'status', 'status_display', 
+            'remarks'
+        )
+
+    def get_student_detail(self, obj):
+        return {
+            'name': f"{obj.student.user.first_name} {obj.student.user.last_name}",
+            'admission_number': obj.student.admission_number,
+            'class_section': f"{obj.student.class_section.class_name.name} - {obj.student.class_section.section.name}"
         }
-    ),
-    responses={200: FeeSerializer()}
-)
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def record_fee_payment(request):
-    fee_id = request.data.get('fee_id')
-    fee = get_object_or_404(Fee, pk=fee_id)
-    
-    fee.paid_date = now()
-    fee.payment_method = request.data.get('payment_method')
-    fee.status = 'PAI'
-    fee.save()
-    
-    serializer = FeeSerializer(fee)
-    return Response(serializer.data)
 
-# Dashboard Views
-@swagger_auto_schema(
-    method='get',
-    responses={200: openapi.Schema(
-        type=openapi.TYPE_OBJECT,
-        properties={
-            'total_students': openapi.Schema(type=openapi.TYPE_INTEGER),
-            'total_teachers': openapi.Schema(type=openapi.TYPE_INTEGER),
-            'recent_attendance': AttendanceSerializer(many=True),
-            'upcoming_exams': ExamSerializer(many=True),
-            'pending_fees': FeeSerializer(many=True),
+class ExamSerializer(serializers.ModelSerializer):
+    exam_type_display = serializers.CharField(source='get_exam_type_display', read_only=True)
+    total_students = serializers.SerializerMethodField()
+    results_published = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Exam
+        fields = (
+            'id', 'name', 'exam_type', 'exam_type_display',
+            'start_date', 'end_date', 'academic_year',
+            'is_active', 'total_students', 'results_published'
+        )
+
+    def get_total_students(self, obj):
+        return ExamResult.objects.filter(exam=obj).values('student').distinct().count()
+
+    def get_results_published(self, obj):
+        return ExamResult.objects.filter(exam=obj).exists()
+
+class ExamResultSerializer(serializers.ModelSerializer):
+    student_detail = serializers.SerializerMethodField()
+    subject_detail = serializers.SerializerMethodField()
+    percentage = serializers.SerializerMethodField()
+    grade = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ExamResult
+        fields = (
+            'id', 'exam', 'student', 'student_detail',
+            'subject', 'subject_detail', 'marks_obtained',
+            'max_marks', 'percentage', 'grade', 'remarks'
+        )
+
+    def get_student_detail(self, obj):
+        return {
+            'name': f"{obj.student.user.first_name} {obj.student.user.last_name}",
+            'admission_number': obj.student.admission_number,
+            'class_section': f"{obj.student.class_section.class_name.name} - {obj.student.class_section.section.name}"
         }
-    )}
-)
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def dashboard_summary(request):
-    today = now().date()
-    
-    summary = {
-        'total_students': Student.objects.count(),
-        'total_teachers': Teacher.objects.count(),
-        'recent_attendance': AttendanceSerializer(
-            Attendance.objects.filter(date=today),
-            many=True
-        ).data,
-        'upcoming_exams': ExamSerializer(
-            Exam.objects.filter(start_date__gte=today),
-            many=True
-        ).data,
-        'pending_fees': FeeSerializer(
-            Fee.objects.filter(status='PEN'),
-            many=True
-        ).data,
-    }
-    
-    return Response(summary)
+
+    def get_subject_detail(self, obj):
+        return {
+            'name': obj.subject.name,
+            'code': obj.subject.code
+        }
+
+    def get_percentage(self, obj):
+        return round((obj.marks_obtained / obj.max_marks) * 100, 2)
+
+    def get_grade(self, obj):
+        percentage = self.get_percentage(obj)
+        if percentage >= 90:
+            return 'A+'
+        elif percentage >= 80:
+            return 'A'
+        elif percentage >= 70:
+            return 'B'
+        elif percentage >= 60:
+            return 'C'
+        elif percentage >= 50:
+            return 'D'
+        else:
+            return 'F'
+
+class FeeSerializer(serializers.ModelSerializer):
+    student_detail = serializers.SerializerMethodField()
+    fee_type_display = serializers.CharField(source='get_fee_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    is_overdue = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Fee
+        fields = (
+            'id', 'student', 'student_detail', 'fee_type',
+            'fee_type_display', 'amount', 'due_date',
+            'paid_date', 'status', 'status_display',
+            'payment_method', 'receipt_number', 'is_overdue'
+        )
+        read_only_fields = ('is_overdue',)
+
+    def get_student_detail(self, obj):
+        return {
+            'name': f"{obj.student.user.first_name} {obj.student.user.last_name}",
+            'admission_number': obj.student.admission_number,
+            'class_section': f"{obj.student.class_section.class_name.name} - {obj.student.class_section.section.name}"
+        }
+
+    def get_is_overdue(self, obj):
+        if obj.status == 'PEN' and obj.due_date < datetime.now().date():
+            return True
+        return False
+
+class StudentAttendanceReportSerializer(serializers.Serializer):
+    total_days = serializers.IntegerField()
+    present_days = serializers.IntegerField()
+    absent_days = serializers.IntegerField()
+    late_days = serializers.IntegerField()
+    attendance_percentage = serializers.FloatField()
+    monthly_report = serializers.DictField()
+
+class StudentFeeSummarySerializer(serializers.Serializer):
+    total_fees = serializers.DecimalField(max_digits=10, decimal_places=2)
+    paid_fees = serializers.DecimalField(max_digits=10, decimal_places=2)
+    pending_fees = serializers.DecimalField(max_digits=10, decimal_places=2)
+    overdue_fees = serializers.DecimalField(max_digits=10, decimal_places=2)
+    payment_history = FeeSerializer(many=True)
+
+class StudentAcademicReportSerializer(serializers.Serializer):
+    student_detail = StudentSerializer()
+    attendance_summary = StudentAttendanceReportSerializer()
+    fee_summary = StudentFeeSummarySerializer()
+    exam_results = ExamResultSerializer(many=True)
+    class_rank = serializers.IntegerField()
+    overall_grade = serializers.CharField()
